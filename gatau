@@ -1,0 +1,369 @@
+#!/usr/bin/env python3
+
+"""
+
+Xiaomi MiMo Orbit 100T Token Giveaway — Auto Submission
+
+Usage: python3 submit.py [--count N] [--dry-run] [--check-pool]
+
+"""
+
+ 
+import os
+
+import sys
+
+import json
+
+import time
+
+import random
+
+import string
+
+import requests
+
+from pathlib import Path
+
+from urllib.parse import urlparse, parse_qs
+
+ 
+# ─── Config ──────────────────────────────────────────────────────────────
+
+ 
+API_BASE = "https://100t.xiaomimimo.com/api/v1"
+
+CAPTCHA_VERIFY_URL = "https://verify.sec.xiaomi.com/captcha/v2/recaptcha/verify"
+
+CAPTCHA_DATA_URL = "https://verify.sec.xiaomi.com/captcha/v2/data"
+
+CAPTCHA_SITEKEY = "6LeBM0ocAAAAAEwYcFUjtxpVbs-0rnbSVXBBXmh4"
+
+CAPTCHA_XIAOMI_KEY = "da94cc0908d0418982b27819e159df75"
+
+ 
+PLAYWRIGHT_PYTHON = "/home/pelerkuda/.hermes/hermes-agent/venv/bin/python3"
+
+ 
+SCRIPT_DIR = Path(__file__).parent
+
+CRED_DIR = Path.home() / ".hermes" / "credentials"
+
+SCREENSHOTS_DIR = SCRIPT_DIR / "screenshots"
+
+DESCRIPTION_FILE = SCRIPT_DIR / "description.txt"
+
+STATE_FILE = SCRIPT_DIR / "state.json"
+
+ 
+PROJECT_FILE = SCRIPT_DIR / "project.txt"
+
+ 
+EMAIL_DOMAINS = ["domain lu"]
+
+ 
+HEADERS = {
+
+    "Content-Type": "application/json;charset=UTF-8",
+
+    "Referer": "https://100t.xiaomimimo.com/",
+
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+
+                  "(KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+
+    "sec-ch-ua": '"Chromium";v="148", "Google Chrome";v="148", "Not/A)Brand";v="99"',
+
+    "sec-ch-ua-mobile": "?0",
+
+    "sec-ch-ua-platform": '"Windows"',
+
+}
+
+ 
+AGENT_TOOL = "claude-code"
+
+MODELS = "claude-series"
+
+ 
+# ─── Realistic Name Data ────────────────────────────────────────────────
+
+ 
+FIRST_NAMES = [
+
+    "alex", "budi", "charlie", "diana", "eka", "felix", "grace", "hendra",
+
+    "irawan", "james", "kevin", "luna", "maya", "nathan", "olive", "putra",
+
+    "rachel", "samuel", "tina", "uma", "victor", "wendy", "xavier", "yuki", "zara",
+
+    "aditya", "bella", "citra", "daniel", "elena", "farhan", "gilang", "hana",
+
+    "ivan", "jessica", "kamil", "lisa", "marco", "nina", "oscar", "priska",
+
+    "rafael", "sarah", "thomas", "ulfa", "vina", "wahyu", "yoga", "zena",
+
+]
+
+ 
+LAST_NAMES = [
+
+    "pratama", "santoso", "wijaya", "hidayat", "firmansyah", "nugroho",
+
+    "saputra", "putra", "kusuma", "rahman", "halim", "tanaka", "nakamura",
+
+    "kim", "chen", "lee", "park", "singh", "patel", "johnson", "williams",
+
+    "brown", "jones", "garcia", "martinez", "anderson", "thomas", "jackson",
+
+    "white", "harris", "clark", "lewis", "robinson", "walker", "young",
+
+    "allen", "king", "wright", "lopez", "hill", "scott", "green", "adams",
+
+]
+
+ 
+# ─── State ──────────────────────────────────────────────────────────────
+
+ 
+def load_state():
+
+    if STATE_FILE.exists():
+
+        return json.loads(STATE_FILE.read_text())
+
+    return {"submitted": [], "total": 0}
+
+ 
+def save_state(state):
+
+    STATE_FILE.write_text(json.dumps(state, indent=2))
+
+ 
+def is_used(email, state):
+
+    return email in state.get("submitted", [])
+
+ 
+# ─── Email Generation ───────────────────────────────────────────────────
+
+ 
+def generate_email(state):
+
+    """Generate realistic email. Patterns:
+
+    - firstname.lastname@domain
+
+    - firstnamelastname99@domain
+
+    - f.lastname@domain
+
+    - first_last777@domain
+
+    """
+
+    for _ in range(200):
+
+        first = random.choice(FIRST_NAMES)
+
+        last = random.choice(LAST_NAMES)
+
+        domain = random.choice(EMAIL_DOMAINS)
+
+        num = random.randint(1, 9999)
+
+ 
+        pattern = random.choice([
+
+            f"{first}.{last}@{domain}",
+
+            f"{first}{last}{random.randint(1,99)}@{domain}",
+
+            f"{first[0]}.{last}{random.randint(10,99)}@{domain}",
+
+            f"{first}_{last}{random.randint(1,999)}@{domain}",
+
+            f"{first}.{last}{random.randint(100,999)}@{domain}",
+
+            f"{first}{random.randint(1000,9999)}@{domain}",
+
+        ])
+
+ 
+        if not is_used(pattern, state):
+
+            return pattern
+
+ 
+    # fallback
+
+    return f"{first}.{last}.{random.randint(10000,99999)}@{domain}"
+#!/usr/bin/env python3
+
+"""
+
+Playwright helper: loads 100t.xiaomimimo.com, fills form, clicks submit
+
+to trigger Xiaomi SDK captcha check. Intercepts /captcha/v2/data response
+
+and extracts the encrypted 'e' token from the challenge URL.
+
+Outputs: event_id\te_token (tab-separated) on success.
+
+"""
+
+import sys
+
+import json
+
+from urllib.parse import urlparse, parse_qs
+
+from playwright.sync_api import sync_playwright
+
+ 
+TARGET_URL = "https://100t.xiaomimimo.com/"
+
+CAPTCHA_DATA_URL = "https://verify.sec.xiaomi.com/captcha/v2/data"
+
+ 
+ 
+def main():
+
+    with sync_playwright() as p:
+
+        browser = p.chromium.launch(headless=True)
+
+        context = browser.new_context(
+
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+
+                       "(KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+
+            viewport={"width": 1920, "height": 1080},
+
+        )
+
+        page = context.new_page()
+
+ 
+        result = {"event_id": None, "e_token": None, "found": False}
+
+ 
+        def handle_response(response):
+
+            if CAPTCHA_DATA_URL in response.url and not result["found"]:
+
+                try:
+
+                    body = response.json()
+
+                    if body.get("code") == 0:
+
+                        data = body.get("data", {})
+
+                        result["event_id"] = data.get("id", "")
+
+                        challenge_url = data.get("url", "")
+
+                        if challenge_url:
+
+                            parsed = urlparse(challenge_url)
+
+                            qs = parse_qs(parsed.query)
+
+                            result["e_token"] = qs.get("e", [""])[0]
+
+                        result["found"] = True
+
+                except:
+
+                    pass
+
+ 
+        page.on("response", handle_response)
+
+ 
+        # Load page
+
+        try:
+
+            page.goto(TARGET_URL, wait_until="domcontentloaded", timeout=30000)
+
+            page.wait_for_timeout(3000)
+
+        except Exception as e:
+
+            print(f"Page load error: {e}", file=sys.stderr)
+
+ 
+        # Click Apply Now to show form
+
+        try:
+
+            page.click('button:has-text("立即申请")', timeout=5000)
+
+            page.wait_for_timeout(1000)
+
+        except Exception as e:
+
+            print(f"Apply click error: {e}", file=sys.stderr)
+
+ 
+        # Fill form with minimal valid data
+
+        try:
+
+            page.fill('input[type="email"]', f'test_{int(__import__("time").time())}@mahiru.my.id')
+
+            page.fill('textarea', 'AI-driven automation workflow using Claude Code.')
+
+            page.fill('input[type="url"]', 'https://github.com/test/repo')
+
+            page.click('button:has-text("Claude Code")', timeout=3000)
+
+            page.wait_for_timeout(300)
+
+            page.click('button:has-text("Claude 系列")', timeout=3000)
+
+            page.wait_for_timeout(300)
+
+        except Exception as e:
+
+            print(f"Form fill error: {e}", file=sys.stderr)
+
+ 
+        # Click Submit to trigger captcha
+
+        try:
+
+            page.click('button:has-text("提交")', timeout=5000)
+
+            # Wait for captcha data check to fire
+
+            page.wait_for_timeout(8000)
+
+        except Exception as e:
+
+            print(f"Submit click error: {e}", file=sys.stderr)
+
+ 
+        browser.close()
+
+ 
+        if result["found"] and result["event_id"] and result["e_token"]:
+
+            print(f"{result['event_id']}\t{result['e_token']}")
+
+            sys.exit(0)
+
+        else:
+
+            print("FAIL", file=sys.stderr)
+
+            sys.exit(1)
+
+ 
+ 
+if __name__ == "__main__":
+
+    main()
